@@ -37,16 +37,16 @@ signature_matrix:
 # (identidad física del componente) y se filtra por Compartimiento = motor.
 db:
   table: "[Oil].[LaboratoryData]"
-  equipment_col: "ComponentSerialNumber"   # identidad del motor/componente físico
+  equipment_col: "MiningEquipmentId"   # identidad del motor/componente físico
   date_col: "FechaMuestreo"
   family_col: "Compartimiento"             # se reutiliza como 'familia' por ahora
   # Filtra a compartimentos de motor. Ajusta los valores a los de tu BD
   # (ej. "MOTOR", "Engine", "MOTOR DIESEL"). Deja [] para no filtrar.
   compartment_col: "Compartimiento"
-  compartment_filter: ["MOTOR", "Engine", "MOTOR DIESEL"]
+  compartment_filter: ["MOTOR"]
   # Columna de estado/condición -> etiqueta de salud (opcional, para VAE/calibración)
   status_col: "Estado"
-  status_healthy_values: ["NORMAL", "Normal"]
+  status_healthy_values: ["NORMAL", "N"]
   column_map:
     Fe: "Fe_ppm"
     Cu: "Cu_ppm"
