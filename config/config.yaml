@@ -28,7 +28,7 @@ signature_matrix:
   Cojinetes:    [0, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,  0]
   Cilindro:     [1, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0,  0]
   Aire:         [1, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0,  0]
-  Refrigerante: [0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, -1]
+  Refrigerante: [0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0,  0]
   Combustion:   [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 0,  0]
 
 # ---------- Mapeo de columnas de la BD -> nombres internos ----------

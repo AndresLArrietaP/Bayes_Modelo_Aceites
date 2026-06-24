@@ -155,10 +155,12 @@ def main():
     m_n = np.abs(m_hat[healthy_mask]) / calib["m_ref"]
     v_n = m_var[healthy_mask] / calib["mvar_ref"]
     _, R_healthy, _ = risk_scores(e_n, m_n, v_n, cfg)
+    # Umbrales más sensibles: tau1 en la mediana de sanos, tau2/tau3 más arriba.
+    # Sube la detección a costa de algunos falsos positivos (aceptable aquí).
     auto_tau = {
-        "tau1": float(np.percentile(R_healthy, 90)),
-        "tau2": float(np.percentile(R_healthy, 97.5)),
-        "tau3": float(np.percentile(R_healthy, 99.5)),
+        "tau1": float(np.percentile(R_healthy, 80)),
+        "tau2": float(np.percentile(R_healthy, 92)),
+        "tau3": float(np.percentile(R_healthy, 97)),
     }
     calib["auto_tau"] = auto_tau
     print(f"\nUmbrales auto-calibrados (desde motores sanos): {auto_tau}")
