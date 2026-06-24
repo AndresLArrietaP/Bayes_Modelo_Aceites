@@ -17,7 +17,7 @@ artifacts/*.pt
 artifacts/*.pkl
 artifacts/*.joblib
 artifacts/*.csv
-data/
+/data/
 *.parquet
 
 # Python
