@@ -78,7 +78,7 @@ def make_supervised_windows(df: pd.DataFrame, cfg: dict, scaler: FleetScaler):
       dates(N,) datetime64    — fecha del ancla (para split temporal)
     """
     T = cfg["model"]["window_size"]
-    feat_cols = cfg["oil_vars"] + cfg["context_vars"]
+    feat_cols = cfg["oil_vars"] + cfg["context_vars"] + cfg.get("extra_vars", [])
     X_list, y_list, grp, dates = [], [], [], []
     for equipo, g in df.groupby("equipo"):
         g = g.sort_values("fecha_muestra").reset_index(drop=True)

@@ -16,6 +16,12 @@ oil_vars: [Fe, Cu, Pb, Sn, Al, Cr, Ni, Si, Na, K, Ox, Nit, Hollin, V100, TBN]
 # en esa tabla; podrían unirse luego desde tablas operativas (Payload, etc.).
 context_vars: [HorasAceite, HorasComp, Horometro]
 
+# ---------- Features extra (solo modo SQL, solo pipeline supervisado) ----------
+# Tasas de desgaste por 100h e índice PQ: detectan desgaste ACELERÁNDOSE, señal
+# fuerte de falla crítica inminente. No entran en la matriz F (que usa oil_vars).
+# El modo sintético los ignora (no existen). Mapear en db.column_map.
+extra_vars: [TasaFe, TasaCu, TasaCr, TasaSn, TasaPb, TasaNi, PQ]
+
 # ---------- Modos de falla (filas de F) ----------
 failure_modes: [Cojinetes, Cilindro, Aire, Refrigerante, Combustion]
 
@@ -66,6 +72,14 @@ db:
     HorasAceite: "HorasDeAceite"
     HorasComp: "HorasDelComp"
     Horometro: "Horometro"
+    # extra_vars (tasas de desgaste e índice PQ)
+    TasaFe: "Tasa_Fe_ppm_100h"
+    TasaCu: "Tasa_Cu_ppm_100h"
+    TasaCr: "Tasa_Cr_ppm_100h"
+    TasaSn: "Tasa_Sn_ppm_100h"
+    TasaPb: "Tasa_Pb_ppm_100h"
+    TasaNi: "Tasa_Ni_ppm_100h"
+    PQ: "Indice_PQ"
 
 # ---------- Hiperparámetros del modelo ----------
 model:

@@ -153,7 +153,7 @@ def main():
     df["y_target"] = df["y_target"].fillna(0).astype(int)
 
     # ---- 2. Escalado + ventanas ----
-    feat_cols = cfg["oil_vars"] + cfg["context_vars"]
+    feat_cols = cfg["oil_vars"] + cfg["context_vars"] + cfg.get("extra_vars", [])
     scaler = FleetScaler(feat_cols).fit(df)
     X, y, grp, dates = make_supervised_windows(df, cfg, scaler)
     print(f"Ventanas etiquetadas: {X.shape} | positivos={int(y.sum())} ({y.mean():.1%})")

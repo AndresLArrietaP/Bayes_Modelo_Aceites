@@ -204,13 +204,22 @@ python -m src.predict_supervised
 
 **Resultados (jun 2026, split por equipo):**
 
-| Modelo | Objetivo | PR-AUC | ROC-AUC | lead time |
-|--------|----------|--------|---------|-----------|
-| GBT    | sev≥2 (screen)   | **0.87** | 0.86 | 30 d |
-| LSTM   | sev=3 (crítico)  | 0.48 | **0.84** | 43 d |
+| Modelo | Objetivo | PR-AUC | ROC-AUC | recall@prec≥50% | lead time |
+|--------|----------|--------|---------|-----------------|-----------|
+| GBT    | sev≥2 (screen)   | **0.87** | 0.86 | — | 30 d |
+| LSTM   | sev=3 (crítico)  | 0.49 | **0.85** | 0.73 | 43 d |
 
-Top features (GBT): `Hollin`, `Oxidacion`, `V100`, `Sn`, `Pb`, `Na`, `K`, `Fe` —
-coherentes con tribología (degradación de aceite, cojinetes, refrigerante, desgaste).
+Top features (GBT): `Oxidacion`, `Sn`, `Cr`, `Fe`, `Nit`, `TBN`, `HorasComp`, `Hollin` —
+coherentes con tribología (degradación de aceite, cojinetes, desgaste cilindro).
+
+**Naturaleza del modelo crítico — RANKER, no alarma.** La precisión tiene un techo
+estructural ~50% porque la condición crítica es **reversible** (transiciones 3→1
+frecuentes; ver `VALIDACION_SSMS.sql` B11): un motor puede entrar en crítico y
+recuperarse, así que "crítico en 120 d" tiene incertidumbre irreducible. El valor
+está en el **ranking** (ROC 0.85): la banda **Alto** es una lista priorizada de
+inspección con ~50% de aciertos (2.5× sobre base rate 20%) y 43 d de anticipación.
+Las tasas de desgaste (`extra_vars`: `Tasa_*_100h`, `Indice_PQ`) se probaron y dieron
+mejora marginal (no superan al `slope` de la ventana); están dispersas en la era antigua.
 
 Config en `config/config.yaml → target:` y `→ train:`. `Fault` (v2):
 `config → faults:` + [src/data/faults.py](src/data/faults.py).

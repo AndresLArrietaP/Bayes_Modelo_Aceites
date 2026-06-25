@@ -13,7 +13,9 @@ from .db import get_engine
 
 
 def _clean_impute(df: pd.DataFrame, cfg: dict) -> pd.DataFrame:
-    num_cols = cfg["oil_vars"] + cfg["context_vars"]
+    # extra_vars solo existen en modo SQL; se ignoran si no están en el df.
+    num_cols = [c for c in cfg["oil_vars"] + cfg["context_vars"] + cfg.get("extra_vars", [])
+                if c in df.columns]
     for c in num_cols:
         df[c] = pd.to_numeric(df[c], errors="coerce")
     df = df.sort_values(["equipo", "fecha_muestra"])
@@ -46,7 +48,7 @@ def _load_sql(cfg: dict) -> pd.DataFrame:
         f"[{db['date_col']}] AS fecha_muestra",
         f"[{db.get('family_col', db['equipment_col'])}] AS familia_motor",
     ]
-    for name in cfg["oil_vars"] + cfg["context_vars"]:
+    for name in cfg["oil_vars"] + cfg["context_vars"] + cfg.get("extra_vars", []):
         real = cmap.get(name)
         if real is None:
             raise KeyError(f"Falta mapeo de columna para '{name}' en config.db.column_map")
@@ -81,7 +83,8 @@ def _load_sql(cfg: dict) -> pd.DataFrame:
 
     df = df.dropna(subset=["equipo", "fecha_muestra"])
     internal = (["equipo", "fecha_muestra", "familia_motor"]
-                + cfg["oil_vars"] + cfg["context_vars"] + ["_modo_real"])
+                + cfg["oil_vars"] + cfg["context_vars"] + cfg.get("extra_vars", [])
+                + ["_modo_real"])
     return df[internal]
 
 
