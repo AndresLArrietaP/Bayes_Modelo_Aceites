@@ -61,3 +61,37 @@ def make_windows(df: pd.DataFrame, cfg: dict, scaler: FleetScaler):
     X = np.asarray(X_list, dtype=np.float32)
     Y = np.asarray(Y_list, dtype=np.float32)
     return X, Y, pd.DataFrame(meta)
+
+
+def make_supervised_windows(df: pd.DataFrame, cfg: dict, scaler: FleetScaler):
+    """Ventanas para clasificación de pronóstico.
+
+    El df debe traer las columnas 'y_target' y 'label_valido' (de labels.py) ya
+    unidas por (equipo, fecha_muestra). Cada ventana = últimas T muestras de metales
+    terminando en la observación t (el 'ahora'); la etiqueta es la del ancla t.
+    Solo se conservan ventanas con label_valido = True (desenlace observable).
+
+    Devuelve:
+      X    (N, T, F) float32  — ventanas de features escaladas
+      y    (N,) int           — etiqueta binaria (adversa en el horizonte)
+      grp  (N,) object        — equipo (para split por grupo)
+      dates(N,) datetime64    — fecha del ancla (para split temporal)
+    """
+    T = cfg["model"]["window_size"]
+    feat_cols = cfg["oil_vars"] + cfg["context_vars"]
+    X_list, y_list, grp, dates = [], [], [], []
+    for equipo, g in df.groupby("equipo"):
+        g = g.sort_values("fecha_muestra").reset_index(drop=True)
+        if len(g) < T:
+            continue
+        feats = scaler.transform(g)
+        for t in range(T - 1, len(g)):
+            if not bool(g.iloc[t].get("label_valido", False)):
+                continue
+            X_list.append(feats[t - T + 1 : t + 1, :])
+            y_list.append(int(g.iloc[t]["y_target"]))
+            grp.append(equipo)
+            dates.append(g.iloc[t]["fecha_muestra"])
+    X = np.asarray(X_list, dtype=np.float32)
+    y = np.asarray(y_list, dtype=np.int64)
+    return X, y, np.asarray(grp, dtype=object), np.asarray(dates, dtype="datetime64[ns]")

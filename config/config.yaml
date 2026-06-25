@@ -88,6 +88,19 @@ train:
   lr: 0.001
   seed: 42
   val_fraction: 0.2
+  # --- Supervisado (train_supervised) ---
+  # OJO: el split "temporal" sobre TODA la data es inválido aquí: hay 2 eras de
+  # codificación (Estado 2019-2022, Condicion 2025-2026, hueco 2023-2024) y el corte
+  # mezcla eras. Usar "group" (holdout por motor, ambas eras en train+test) o
+  # restringir a una era. Ver docs/VALIDACION_SSMS.sql Bloque 16.
+  split_mode: "group"      # "group" (holdout por motor) | "temporal" (solo dentro de 1 era)
+  precision_target: 0.60       # umbral banda MEDIA: precisión >= este valor
+  precision_target_alta: 0.85  # umbral banda ALTA: alertas de alta confianza
+  weight_decay: 0.0001         # regularización L2 contra sobreajuste
+
+# ---------- Tablero de flota (predict_supervised) ----------
+predict:
+  max_dias_inactivo: 180   # motores sin muestra en > N días se marcan INACTIVO (no accionables)
 
 # ---------- Score de riesgo y umbrales ----------
 risk:
@@ -98,3 +111,35 @@ risk:
   tau1: 0.25
   tau2: 0.50
   tau3: 0.75
+
+# ---------- Objetivo de pronóstico supervisado (verdad de campo PRIMARIA) ----------
+# v1: trayectoria de condición del laboratorio. Una muestra es POSITIVA si el motor
+# entra en condición adversa dentro de (t, t+horizon_days]. Llenar adverse_values y
+# condition_col tras correr docs/VALIDACION_SSMS.sql (Bloque 9 y 11).
+target:
+  mode: "condition"            # "condition" (laboratorio, v1) | "fault" (telemetría, v2)
+  horizon_days: 120            # ventana hacia adelante para etiquetar positivos
+  adverse_min_severity: 3      # 3=CRÍTICO (lista accionable corta) | 2=precaución+ (screen general)
+  year_min: null               # si se fija (p.ej. 2025), entrena SOLO esa era (Condicion). null = todas
+  # Severidad unificada 0..3 (0 Normal, 1 Monitoreo, 2 Precaución, 3 Crítico).
+  # Condicion es primaria; Estado es fallback. Verificar el mapeo con VALIDACION B13.
+  condicion_map: {"1": 0, "2": 2, "3": 3}
+  estado_map: {"NORMAL": 0, "N": 0, "MONITOREO": 1,
+               "PRECAUTORIO": 2, "P": 2, "CRITICO": 3, "CRÍTICO": 3, "C": 3}
+
+# ---------- Eventos de falla (telemetría; SECUNDARIO/v2, no usar como label v1) ----------
+# Fuente: [Eqpcare].[Fault]. Una muestra de aceite es POSITIVA si el equipo sufre
+# una falla de motor dentro del horizonte hacia adelante. AJUSTAR engine_codes /
+# engine_keywords tras correr docs/VALIDACION_SSMS.sql (Bloques 2 y 2b).
+faults:
+  table: "[Eqpcare].[Fault]"
+  equipment_col: "MiningEquipmentId"
+  date_col: "DateFrom"
+  smr_col: "SmrFrom"
+  code_col: "Code"
+  desc_col: "Description"
+  horizon_days: 90       # ventana calendario para etiquetar positivos
+  horizon_hours: 500     # ventana en horas de operación (Smr) — preferida si hay cobertura
+  engine_codes: []       # prefijos de Code de motor (del Bloque 2). Vacío = no filtra por code
+  engine_keywords: ["MOTOR", "ACEITE", "CULATA", "BIELA", "PISTON", "CAMISA",
+                    "COJINETE", "TURBO", "INYEC", "LUBRIC", "REFRIGER"]

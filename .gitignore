@@ -29,3 +29,6 @@ __pycache__/
 # Sistema
 .DS_Store
 Thumbs.db
+
+# Material de referencia: el paper publicado no se redistribuye (copyright/peso)
+Referencias/*.pdf

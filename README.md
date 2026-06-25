@@ -154,8 +154,65 @@ escribe en el notebook).
   modo) para validar todo el pipeline. **No reemplaza datos reales**: sirve para
   desarrollo, pruebas y para que Claude Code itere sin acceso a la BD.
 
-## Próximos pasos sugeridos
-1. Mapear el esquema real de `bd_kmmp_osconfiabilidad` y completar `column_map`.
-2. Definir qué columna marca la fecha/horas y cómo se identifican los componentes.
-3. Calibrar umbrales con al menos un caso de falla documentado.
-4. (Opcional) dashboard de flota y propagación temporal a horizonte 200–500 h.
+## Hacia pronóstico supervisado (precisión real) — v2 con `Eqpcare.Fault`
+
+La evaluación actual (`src/evaluate.py`, refs 1 y 2) mide **auto-consistencia**: la
+etiqueta deriva de los mismos metales que el modelo ya ve, así que no demuestra
+capacidad de **predecir fallas**. La verdad de campo está en **`Eqpcare.Fault`**
+(eventos reales con `DateFrom`/`SmrFrom` por equipo).
+
+Reformulación: una muestra de aceite en t es **POSITIVA** si el mismo motor sufre
+una falla dentro del horizonte (t, t+H] (días o, mejor, horas de operación `Smr`).
+Esto habilita precision/recall/PR-AUC y **lead time** (anticipación) reales.
+
+**Hallazgo de la validación (SSMS):** `Eqpcare.Fault` es un LOG DE TELEMETRÍA
+(~1.9M eventos, alarmas de sensor), no fallas de mantenimiento → inservible como
+etiqueta v1 (tasa base 57%). La verdad de campo útil es la **condición del
+laboratorio** (`Condicion`/`Estado`), unificada en severidad ordinal
+**0=Normal, 1=Monitoreo, 2=Precaución, 3=Crítico** = `coalesce(Condicion, Estado)`
+(~11.9k muestras etiquetables, ~20% positivas en 120 días). `Fault` queda para v2.
+
+### Pipeline supervisado (v1, implementado)
+
+```bash
+# 1) Validar la BD (en SSMS): docs/VALIDACION_SSMS.sql  (Fases 1-3)
+# 2) Entrenar el clasificador de pronóstico (usa Azure SQL):
+python -m src.train_supervised
+# 3) Tablero de flota: P(condición adversa) por motor + modo dominante
+python -m src.predict_supervised
+```
+
+- **Objetivo:** `P(severidad >= 2 en (t, t+H])` desde la ventana de metales.
+- **Etiqueta** ([src/data/labels.py](src/data/labels.py)): severidad unificada con
+  **censura por derecha** (un negativo solo cuenta si su desenlace es observable).
+- **Features densos / etiqueta dispersa:** ventanas sobre metales (23.8k), se
+  conservan solo las de desenlace observable ([features/windows.py](src/features/windows.py)).
+- **Modelos:** `LSTMClassifier` (encoder LSTM + cabeza binaria, MC Dropout para
+  incertidumbre) y baseline `HistGradientBoosting` sobre features de tendencia
+  (explicable). Se queda el mejor por PR-AUC.
+- **Split sin fuga:** la condición tiene **dos eras** (`Estado` 2019-2022, `Condicion`
+  2025-2026; ver `VALIDACION_SSMS.sql` B16). El split temporal sobre toda la data
+  mezcla eras y NO generaliza (ROC≈0.5); por eso se usa **split por equipo**
+  (`train.split_mode: group`), o restringir a una era con `target.year_min`. Pérdida
+  ponderada (`pos_weight`) por desbalance.
+- **Dos modos** (`target.adverse_min_severity`): **2** = screen general (precaución+,
+  ~48% base); **3** = alerta crítica accionable (~20% base). Artefactos con sufijo
+  (`_sev2`/`_sev3`) → ambos coexisten.
+- **Tablero** ([src/predict_supervised.py](src/predict_supervised.py)): bandas
+  **Bajo/Medio/Alto** (doble umbral por precisión), filtro de **motores inactivos**
+  (`predict.max_dias_inactivo`) y modo de falla dominante (firmas) por explicabilidad.
+
+**Resultados (jun 2026, split por equipo):**
+
+| Modelo | Objetivo | PR-AUC | ROC-AUC | lead time |
+|--------|----------|--------|---------|-----------|
+| GBT    | sev≥2 (screen)   | **0.87** | 0.86 | 30 d |
+| LSTM   | sev=3 (crítico)  | 0.48 | **0.84** | 43 d |
+
+Top features (GBT): `Hollin`, `Oxidacion`, `V100`, `Sn`, `Pb`, `Na`, `K`, `Fe` —
+coherentes con tribología (degradación de aceite, cojinetes, refrigerante, desgaste).
+
+Config en `config/config.yaml → target:` y `→ train:`. `Fault` (v2):
+`config → faults:` + [src/data/faults.py](src/data/faults.py).
+
+> Diagnóstico de BD: `python -m src.data.diagnose` (incluye sección FALLAS).
