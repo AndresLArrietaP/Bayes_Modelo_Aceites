@@ -26,8 +26,18 @@ from sqlalchemy import text
 from .db import get_engine
 
 
+def _compartment_where(db: dict) -> str:
+    """Cláusula WHERE para filtrar al/los compartimiento(s) del componente activo."""
+    filt = db.get("compartment_filter") or []
+    col = db.get("compartment_col")
+    if not filt or not col:
+        return ""
+    vals = ", ".join("'" + v.replace("'", "''") + "'" for v in filt)
+    return f"WHERE [{col}] IN ({vals})"
+
+
 def load_condition_series(cfg: dict) -> pd.DataFrame:
-    """Carga [equipo, fecha_muestra, condicion, estado, horometro] de muestras MOTOR."""
+    """Carga [equipo, fecha_muestra, condicion, estado, horometro] del componente activo."""
     db = cfg["db"]
     q = f"""
         SELECT [{db['equipment_col']}] AS equipo,
@@ -36,7 +46,7 @@ def load_condition_series(cfg: dict) -> pd.DataFrame:
                [{db.get('status_col', 'Estado')}] AS estado,
                [Horometro]             AS horometro
         FROM {db['table']}
-        WHERE [{db['compartment_col']}] = 'MOTOR'
+        {_compartment_where(db)}
     """
     with get_engine().connect() as c:
         df = pd.read_sql(text(q), c)

@@ -225,3 +225,69 @@ Config en `config/config.yaml → target:` y `→ train:`. `Fault` (v2):
 `config → faults:` + [src/data/faults.py](src/data/faults.py).
 
 > Diagnóstico de BD: `python -m src.data.diagnose` (incluye sección FALLAS).
+
+## Multi-componente (v3) — un modelo por tipo de componente
+
+El objetivo del proyecto es predecir fallas **por componente, según la naturaleza
+de cada uno**. La BD (`Oil.LaboratoryData`) tiene muchos compartimientos además del
+motor: transmisión, mandos finales, ruedas, diferenciales, hidráulico, motores de
+tracción, etc. Cada uno tiene su **tribología** (qué metales importan), sus
+**límites LC** (en `Eqpcare.lc`, columna `COMPONENTE`) y su **base rate** propia.
+
+El pipeline es **parametrizable por componente** mediante un registro en
+`config.yaml → components:`. Cada entrada declara su `compartment_filter` (en la BD),
+su `lc_componente` (en `Eqpcare.lc`) y, según su física, `oil_vars` / `failure_modes`
+/ `signature_matrix` propios. La base = motor; los demás solo declaran lo que cambia.
+Los componentes de **engranaje** (transmisión, mando final, ruedas, tracción)
+comparten config vía anclas YAML (`*gear_oil_vars`, `*gear_F`).
+
+```bash
+# Selección por variable de entorno COMPONENT (engine por defecto):
+COMPONENT=transmision python -m src.train_supervised
+COMPONENT=transmision python -m src.predict_supervised
+# Overrides rápidos para barridos (sin editar el yaml):
+COMPONENT=mando_final ADVERSE_MIN=2 HORIZON_DAYS=90 python -m src.train_supervised
+```
+
+Los artefactos llevan sufijo por componente y severidad (`clf_gbt_transmision_sev2.joblib`,
+etc.) → **todos los modelos coexisten** sin pisarse.
+
+**Resultados (jun 2026, split por equipo, sev≥2 salvo motor):**
+
+| Componente | Objetivo | Base rate | PR-AUC | ROC-AUC | recall@prec≥50% |
+|---|---|---|---|---|---|
+| engine (motor)    | sev≥3 crítico | 0.20 | 0.53 | 0.86 | 0.85 |
+| transmision       | sev≥2 | 0.42 | 0.59* | 0.73* | 0.73 |
+| mando_final       | sev≥2 | 0.31 | 0.75 | 0.84 | 0.90 |
+| rueda_delantera   | sev≥2 | 0.36 | 0.85 | 0.85 | 0.85 |
+| hidraulico        | sev≥2 | 0.41 | 0.85 | 0.89 | 0.98 |
+| motor_traccion    | sev≥2 | 0.69 | 0.97† | 0.93 | 1.00 |
+
+\* Transmisión tiene pocas muestras (val ~32 positivos) → métrica de **alta varianza**
+con split único; necesita k-fold por grupo (pendiente). † `motor_traccion` inflado por
+base rate 69% (ver abajo).
+
+### Endurecimiento (v3.1)
+
+Tres correcciones que aplican a todos los componentes:
+- **Guarda temporal de ventana** (`model.max_window_days`, 540 d): descarta ventanas
+  cuyo span es absurdo por muestreo esporádico (no forman trayectoria coherente).
+- **Escalado sin fuga**: el `StandardScaler` se ajusta SOLO en train tras el split
+  (antes veía todo el dataset). Subió el LSTM del motor a ROC 0.86 / PR-AUC 0.53.
+- **Calibración isotónica** (ajustada en val): la `prob_adversa` del tablero es una
+  probabilidad interpretable y las bandas viven en ese espacio (antes el GBT pegaba
+  todo a ~0.98). `meta_sup` guarda los calibradores (`iso_lstm`, `iso_gbt`).
+
+**Lecciones clave:**
+- **sev≥3 (crítico) solo aplica al motor.** En componentes de engranaje el estado
+  crítico es rarísimo (transmisión ~3% base) → inaprendible. El objetivo accionable
+  es **sev≥2 (precaución+)**: screen de desgaste con anticipación. Por eso cada
+  componente no-motor fija `adverse_min_severity: 2` en su config.
+- **Los componentes de engranaje son MÁS predecibles que el motor.** Su degradación
+  es monótona (desgaste acumulativo), no reversible como la condición crítica del
+  motor. PR-AUC 0.74–0.85 con features tribológicas correctas (Cu/Fe/Ni/PQ).
+- **⚠️ `motor_traccion` (PR-AUC 0.97) está bajo sospecha:** base rate 69% infla la
+  métrica (flota crónicamente degradada o sesgo en la condición de ese
+  compartimiento). No tomar como logro hasta auditar la etiqueta.
+- **Cobertura de límites LC variable:** MOTOR 55%, TRANSMISION 10%. Donde no hay LC
+  se usa fallback (percentil 95). Ampliar `Eqpcare.lc` mejoraría la normalización.

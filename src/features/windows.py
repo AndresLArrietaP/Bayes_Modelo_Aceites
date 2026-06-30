@@ -34,6 +34,18 @@ class FleetScaler:
         scale = self.scaler.scale_[:n_oil]
         return x_scaled * scale + mean
 
+    def fit_on_array(self, arr2d: np.ndarray) -> "FleetScaler":
+        """Ajusta sobre una matriz (n, F) ya en orden de cols. Para escalar DESPUÉS
+        del split (fit solo en train) y evitar fuga de estadísticos del test."""
+        self.scaler.fit(np.asarray(arr2d, dtype=float))
+        return self
+
+    def transform_windows(self, X_raw: np.ndarray) -> np.ndarray:
+        """Aplica el escalado a un tensor de ventanas (N, T, F)."""
+        N, T, F = X_raw.shape
+        flat = self.scaler.transform(X_raw.reshape(-1, F).astype(float))
+        return flat.reshape(N, T, F).astype(np.float32)
+
 
 def make_windows(df: pd.DataFrame, cfg: dict, scaler: FleetScaler):
     """Devuelve X (N, T, F), Y (N, d), y meta (DataFrame con equipo/fecha/modo)."""
@@ -63,7 +75,7 @@ def make_windows(df: pd.DataFrame, cfg: dict, scaler: FleetScaler):
     return X, Y, pd.DataFrame(meta)
 
 
-def make_supervised_windows(df: pd.DataFrame, cfg: dict, scaler: FleetScaler):
+def make_supervised_windows(df: pd.DataFrame, cfg: dict, scaler: FleetScaler | None = None):
     """Ventanas para clasificación de pronóstico.
 
     El df debe traer las columnas 'y_target' y 'label_valido' (de labels.py) ya
@@ -71,27 +83,46 @@ def make_supervised_windows(df: pd.DataFrame, cfg: dict, scaler: FleetScaler):
     terminando en la observación t (el 'ahora'); la etiqueta es la del ancla t.
     Solo se conservan ventanas con label_valido = True (desenlace observable).
 
+    Guarda temporal: una ventana cuyo span (fecha_ancla - fecha_inicio) excede
+    `model.max_window_days` se descarta — esas muestras están demasiado separadas
+    para formar una trayectoria coherente (muestreo de aceite esporádico).
+
+    Si `scaler` es None devuelve ventanas CRUDAS (sin escalar): permite ajustar el
+    scaler solo en train tras el split y evitar fuga. Si se pasa un scaler ajustado,
+    devuelve ventanas escaladas (compatibilidad).
+
     Devuelve:
-      X    (N, T, F) float32  — ventanas de features escaladas
+      X    (N, T, F) float32  — ventanas (crudas o escaladas según `scaler`)
       y    (N,) int           — etiqueta binaria (adversa en el horizonte)
       grp  (N,) object        — equipo (para split por grupo)
       dates(N,) datetime64    — fecha del ancla (para split temporal)
     """
     T = cfg["model"]["window_size"]
     feat_cols = cfg["oil_vars"] + cfg["context_vars"] + cfg.get("extra_vars", [])
+    max_days = cfg["model"].get("max_window_days")
     X_list, y_list, grp, dates = [], [], [], []
+    n_drop_span = 0
     for equipo, g in df.groupby("equipo"):
         g = g.sort_values("fecha_muestra").reset_index(drop=True)
         if len(g) < T:
             continue
-        feats = scaler.transform(g)
+        raw = g[feat_cols].astype(float).values
+        feats = scaler.transform(g) if scaler is not None else raw
+        fechas = pd.to_datetime(g["fecha_muestra"]).values
         for t in range(T - 1, len(g)):
             if not bool(g.iloc[t].get("label_valido", False)):
                 continue
+            if max_days is not None:
+                span = (fechas[t] - fechas[t - T + 1]) / np.timedelta64(1, "D")
+                if span > float(max_days):
+                    n_drop_span += 1
+                    continue
             X_list.append(feats[t - T + 1 : t + 1, :])
             y_list.append(int(g.iloc[t]["y_target"]))
             grp.append(equipo)
             dates.append(g.iloc[t]["fecha_muestra"])
+    if max_days is not None and n_drop_span:
+        print(f"[windows] descartadas {n_drop_span} ventanas por span > {max_days} días")
     X = np.asarray(X_list, dtype=np.float32)
     y = np.asarray(y_list, dtype=np.int64)
     return X, y, np.asarray(grp, dtype=object), np.asarray(dates, dtype="datetime64[ns]")

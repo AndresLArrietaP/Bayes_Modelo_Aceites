@@ -22,9 +22,13 @@ def _norm(s):
     return s.astype(str).str.strip().str.upper() if hasattr(s, "str") else str(s).strip().upper()
 
 def load_limits(cfg) -> pd.DataFrame:
-    """Devuelve límites críticos por (proyecto, modelo) para MOTOR, en columnas internas."""
-    cols = ", ".join(f'[{c}] AS "{k}"' for k, c in _LC_MAP.items())
-    q = f"SELECT Proyecto, MODELO, {cols} FROM Eqpcare.lc WHERE COMPONENTE = 'MOTOR'"
+    """Devuelve límites críticos por (proyecto, modelo) del componente activo, en
+    columnas internas. Solo trae los límites de los oil_vars del componente."""
+    comp_lc = cfg.get("db", {}).get("lc_componente", "MOTOR")
+    used = [v for v in cfg["oil_vars"] if v in _LC_MAP]
+    cols = ", ".join(f'[{_LC_MAP[k]}] AS "{k}"' for k in used)
+    safe = comp_lc.replace("'", "''")
+    q = f"SELECT Proyecto, MODELO, {cols} FROM Eqpcare.lc WHERE COMPONENTE = '{safe}'"
     with get_engine().connect() as c:
         lc = pd.read_sql(text(q), c)
     lc["_key"] = _norm(lc["Proyecto"]) + "|" + _norm(lc["MODELO"])
@@ -53,12 +57,15 @@ def attach_limits(df: pd.DataFrame, cfg: dict) -> pd.DataFrame:
     emap["_equipo_str"] = emap["equipo_id"].astype(str).str.upper()
     df = df.merge(emap[["_equipo_str", "_key"]], on="_equipo_str", how="left")
 
-    lc_cols = {k: f"LC_{k}" for k in _LC_MAP}
-    lc_small = lc[["_key"] + list(_LC_MAP.keys())].rename(columns=lc_cols)
+    avail = [k for k in _LC_MAP if k in lc.columns]   # solo límites del componente
+    lc_cols = {k: f"LC_{k}" for k in avail}
+    lc_small = lc[["_key"] + avail].rename(columns=lc_cols)
     df = df.merge(lc_small, on="_key", how="left")
 
-    cobertura = df["LC_Fe"].notna().mean() * 100
-    print(f"[limits] Cobertura de límites lc: {cobertura:.1f}% de las muestras")
+    probe = f"LC_{avail[0]}" if avail else None
+    cobertura = (df[probe].notna().mean() * 100) if probe else 0.0
+    print(f"[limits] Cobertura de límites lc ({cfg.get('db', {}).get('lc_componente', '?')}): "
+          f"{cobertura:.1f}% de las muestras")
     return df.drop(columns=["_equipo_str", "_key"])
 
 def load_raw_for_label(cfg):
@@ -66,9 +73,12 @@ def load_raw_for_label(cfg):
     from sqlalchemy import text
     from ..data.db import get_engine
     db = cfg["db"]; cmap = db["column_map"]
+    filt = db.get("compartment_filter") or []
+    vals = ", ".join("'" + v.replace("'", "''") + "'" for v in filt)
+    where = f"WHERE [{db['compartment_col']}] IN ({vals})" if filt else ""
     sel = [f"[{db['equipment_col']}] AS equipo", f"[{db['date_col']}] AS fecha_muestra"]
     sel += [f"[{cmap[v]}] AS {v}" for v in cfg["oil_vars"]]
-    q = f"SELECT {', '.join(sel)} FROM {db['table']} WHERE [{db['compartment_col']}]='MOTOR'"
+    q = f"SELECT {', '.join(sel)} FROM {db['table']} {where}"
     import pandas as pd
     with get_engine().connect() as c:
         df = pd.read_sql(text(q), c)

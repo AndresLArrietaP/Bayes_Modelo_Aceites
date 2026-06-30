@@ -61,12 +61,18 @@ def main():
                              cfg["model"]["lstm_layers"], cfg["model"]["mc_dropout"])
         clf.load_state_dict(torch.load(ARTIFACTS / f"clf_lstm{sfx}.pt"))
         prob, std = clf.predict_proba(torch.tensor(X), n_samples=cfg["model"]["mc_samples"])
+        iso = meta_sup.get("iso_lstm")
         thr, thr_alta = meta_sup["thr_lstm"], meta_sup["thr_lstm_alta"]
     else:
         gbt = joblib.load(ARTIFACTS / f"clf_gbt{sfx}.joblib")
         prob = gbt.predict_proba(window_features(X))[:, 1]
         std = None  # GBT no entrega incertidumbre (no MC Dropout)
+        iso = meta_sup.get("iso_gbt")
         thr, thr_alta = meta_sup["thr_gbt"], meta_sup["thr_gbt_alta"]
+
+    # Calibración isotónica (probabilidad interpretable; umbrales en mismo espacio)
+    if iso is not None:
+        prob = iso.transform(prob)
 
     # Banda de riesgo por doble umbral (calibrados por precisión en train)
     banda = np.where(prob >= thr_alta, "Alto",

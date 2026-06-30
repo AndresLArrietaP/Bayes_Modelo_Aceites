@@ -37,6 +37,88 @@ signature_matrix:
   Refrigerante: [0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0,  0]
   Combustion:   [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 0,  0]
 
+# ==========================================================
+#  Componente activo y registro multi-componente
+# ==========================================================
+# El proyecto entrena UN modelo por tipo de componente: cada uno tiene su
+# compartimiento en la BD, su nombre en la tabla de límites Eqpcare.lc y, según
+# su tribología, sus propios oil_vars / matriz de firmas / modos de falla.
+# Las claves de arriba (oil_vars, signature_matrix, failure_modes) son la base =
+# ENGINE (motor). Un componente solo declara lo que cambia respecto de esa base.
+#
+# Selección: env COMPONENT > active_component. Por defecto 'engine' (= histórico).
+#   COMPONENT=transmision python -m src.train_supervised
+active_component: engine
+
+# Anclas reutilizables para componentes de ENGRANAJE (transmisión, mando final,
+# diferenciales, reductores, ruedas, tándem): comparten tribología (desgaste de
+# engranaje/cojinete + contaminación), sin combustión ni refrigerante.
+_gear_oil_vars: &gear_oil_vars [Fe, Cu, Pb, Sn, Al, Cr, Ni, Si, Na, V100]
+_gear_modes: &gear_modes [Engranaje, Cojinete, Contaminacion]
+_gear_F: &gear_F
+  #              Fe Cu Pb Sn Al Cr Ni Si Na V100
+  Engranaje:     [1, 0, 0, 0, 0, 1, 0, 0, 0,  0]
+  Cojinete:      [0, 1, 1, 1, 0, 0, 1, 0, 0,  0]
+  Contaminacion: [0, 0, 0, 0, 1, 0, 0, 1, 1,  0]
+
+components:
+  # ---- Motor diésel (base) ----
+  engine:
+    compartment_filter: ["MOTOR", "MOTOR DIESEL LH", "MOTOR DIESEL RH"]
+    lc_componente: "MOTOR"           # inherita oil_vars / signature_matrix base
+
+  # ---- Transmisión (mejor cobertura de etiqueta, ~90%) ----
+  # sev>=3 (crítico) es rarísimo en cajas de engranaje (~3% base) -> inaprendible.
+  # El objetivo accionable es sev>=2 (precaución+): screen de desgaste con anticipación.
+  transmision:
+    compartment_filter: ["TRANSMISION"]
+    lc_componente: "TRANSMISION"
+    adverse_min_severity: 2
+    oil_vars: *gear_oil_vars
+    failure_modes: *gear_modes
+    signature_matrix: *gear_F
+
+  # ---- Mando final (LH+RH como un solo modelo de tipo de componente) ----
+  mando_final:
+    compartment_filter: ["MANDO FINAL LH", "MANDO FINAL RH",
+                         "MANDO FINAL DELANTERO LH", "MANDO FINAL DELANTERO RH",
+                         "MANDO FINAL POSTERIOR LH", "MANDO FINAL POSTERIOR RH"]
+    lc_componente: "MANDO FINAL LH"
+    adverse_min_severity: 2
+    oil_vars: *gear_oil_vars
+    failure_modes: *gear_modes
+    signature_matrix: *gear_F
+
+  # ---- Motor de tracción eléctrico (rueda; tren de engranaje) ----
+  motor_traccion:
+    compartment_filter: ["MOTOR DE TRACCION LH", "MOTOR DE TRACCION RH"]
+    lc_componente: "MOTOR DE TRACCION LH"
+    adverse_min_severity: 2
+    oil_vars: *gear_oil_vars
+    failure_modes: *gear_modes
+    signature_matrix: *gear_F
+
+  # ---- Rueda delantera (mando de rueda; engranaje) ----
+  rueda_delantera:
+    compartment_filter: ["RUEDA DELANTERA LH", "RUEDA DELANTERA RH"]
+    lc_componente: "RUEDA DELANTERA LH"
+    adverse_min_severity: 2
+    oil_vars: *gear_oil_vars
+    failure_modes: *gear_modes
+    signature_matrix: *gear_F
+
+  # ---- Sistema hidráulico (desgaste de bomba + contaminación) ----
+  hidraulico:
+    compartment_filter: ["SISTEMA HIDRAULICO"]
+    lc_componente: "SISTEMA HIDRAULICO"
+    adverse_min_severity: 2
+    oil_vars: [Fe, Cu, Pb, Sn, Al, Cr, Si, Na, V100]
+    failure_modes: [Bomba, Contaminacion]
+    signature_matrix:
+      #          Fe Cu Pb Sn Al Cr Si Na V100
+      Bomba:         [1, 1, 1, 1, 0, 1, 0, 0,  0]
+      Contaminacion: [0, 0, 0, 0, 1, 0, 1, 1,  0]
+
 # ---------- Mapeo de columnas de la BD -> nombres internos ----------
 # Esquema real: tabla [Oil].[LaboratoryData].
 # La serie temporal de un "motor" se agrupa por ComponentSerialNumber
@@ -46,10 +128,11 @@ db:
   equipment_col: "MiningEquipmentId"   # identidad del motor/componente físico
   date_col: "FechaMuestreo"
   family_col: "Compartimiento"             # se reutiliza como 'familia' por ahora
-  # Filtra a compartimentos de motor. Ajusta los valores a los de tu BD
-  # (ej. "MOTOR", "Engine", "MOTOR DIESEL"). Deja [] para no filtrar.
+  # Filtra al compartimiento del componente activo (lo fija el registro de arriba).
+  # Deja [] para no filtrar.
   compartment_col: "Compartimiento"
   compartment_filter: ["MOTOR"]
+  lc_componente: "MOTOR"   # nombre en Eqpcare.lc (lo sobreescribe el componente)
   # Columna de estado/condición -> etiqueta de salud (opcional, para VAE/calibración)
   status_col: "Estado"
   status_healthy_values: ["NORMAL", "N"]
@@ -85,6 +168,7 @@ db:
 model:
   method: "mc_dropout"     # "mc_dropout" (rápido) o "bbb" (Bayes by Backprop, fiel al paper)
   window_size: 10          # T: nº de muestras por ventana temporal
+  max_window_days: 540     # descarta ventanas cuyo span > N días (muestreo esporádico)
   horizon: 1               # H: pasos adelante a predecir (en muestras)
   lstm_hidden: 64
   lstm_layers: 2

@@ -24,6 +24,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 from sklearn.ensemble import HistGradientBoostingClassifier
+from sklearn.isotonic import IsotonicRegression
 from sklearn.metrics import (average_precision_score, confusion_matrix,
                              precision_recall_curve, roc_auc_score)
 from torch.utils.data import DataLoader, TensorDataset
@@ -44,8 +45,10 @@ _STATS = ["last", "mean", "std", "max", "min", "slope", "delta"]
 
 
 def artifact_suffix(cfg: dict) -> str:
-    """Sufijo de artefactos por severidad objetivo: _sev2 (screen) | _sev3 (crítico)."""
-    return f"_sev{int(cfg['target']['adverse_min_severity'])}"
+    """Sufijo de artefactos por componente y severidad: _<comp>_sev{2|3}.
+    Permite que coexistan modelos de motor, transmisión, etc. sin pisarse."""
+    comp = cfg.get("_component", "engine")
+    return f"_{comp}_sev{int(cfg['target']['adverse_min_severity'])}"
 
 
 def feature_names(feat_cols) -> list[str]:
@@ -152,12 +155,12 @@ def main():
     df["label_valido"] = df["label_valido"].fillna(False)
     df["y_target"] = df["y_target"].fillna(0).astype(int)
 
-    # ---- 2. Escalado + ventanas ----
+    # ---- 2. Ventanas CRUDAS (el escalado se ajusta DESPUÉS del split, sin fuga) ----
     feat_cols = cfg["oil_vars"] + cfg["context_vars"] + cfg.get("extra_vars", [])
-    scaler = FleetScaler(feat_cols).fit(df)
-    X, y, grp, dates = make_supervised_windows(df, cfg, scaler)
-    print(f"Ventanas etiquetadas: {X.shape} | positivos={int(y.sum())} ({y.mean():.1%})")
-    if len(X) == 0 or y.sum() == 0:
+    scaler = FleetScaler(feat_cols)
+    X_raw, y, grp, dates = make_supervised_windows(df, cfg, scaler=None)
+    print(f"Ventanas etiquetadas: {X_raw.shape} | positivos={int(y.sum())} ({y.mean():.1%})")
+    if len(X_raw) == 0 or y.sum() == 0:
         raise SystemExit("Sin ventanas etiquetadas/positivas. Revisa target.* en config.")
 
     # ---- 3. Split (temporal con embargo | por equipo) ----
@@ -171,6 +174,10 @@ def main():
     for name, m in [("train", tr), ("val", va), ("test", te)]:
         if m.sum() == 0 or y[m].sum() == 0:
             raise SystemExit(f"Split '{name}' sin positivos; ajusta cortes/horizonte.")
+
+    # Escalado: estadísticos ajustados SOLO en train, aplicados a todo (sin fuga).
+    scaler.fit_on_array(X_raw[tr].reshape(-1, X_raw.shape[2]))
+    X = scaler.transform_windows(X_raw)
 
     # ---- 4. LSTM clasificador ----
     pos_weight = torch.tensor([(y[tr] == 0).sum() / max(1, (y[tr] == 1).sum())], dtype=torch.float32)
@@ -214,10 +221,15 @@ def main():
         p_va = torch.sigmoid(clf(Xva)).cpu().numpy()
     pt = cfg["train"].get("precision_target", 0.6)
     pt_alta = cfg["train"].get("precision_target_alta", 0.85)
-    thr = _threshold_at_precision(y[va], p_va, pt)
-    thr_alta = _threshold_at_precision(y[va], p_va, pt_alta)
+    # Calibración isotónica (ajustada en val): la prob mostrada es interpretable y
+    # los umbrales de banda viven en espacio de probabilidad real, no de score.
+    iso_lstm = IsotonicRegression(out_of_bounds="clip").fit(p_va, y[va])
+    p_va_c = iso_lstm.transform(p_va)
+    thr = _threshold_at_precision(y[va], p_va_c, pt)
+    thr_alta = _threshold_at_precision(y[va], p_va_c, pt_alta)
     p_te, p_te_std = clf.predict_proba(torch.tensor(X[te]).to(device),
                                        n_samples=cfg["model"]["mc_samples"])
+    p_te = iso_lstm.transform(p_te)
     ap_lstm = _report("LSTM clasificador (TEST)", y[te], p_te, thr)
     print(f"   incertidumbre media (std MC) en test: {p_te_std.mean():.3f}")
 
@@ -229,6 +241,9 @@ def main():
     gbt.fit(window_features(X[tr]), y[tr])
     p_va_gbt = gbt.predict_proba(window_features(X[va]))[:, 1]
     p_te_gbt = gbt.predict_proba(window_features(X[te]))[:, 1]
+    iso_gbt = IsotonicRegression(out_of_bounds="clip").fit(p_va_gbt, y[va])
+    p_va_gbt = iso_gbt.transform(p_va_gbt)
+    p_te_gbt = iso_gbt.transform(p_te_gbt)
     thr_gbt = _threshold_at_precision(y[va], p_va_gbt, pt)
     thr_gbt_alta = _threshold_at_precision(y[va], p_va_gbt, pt_alta)
     ap_gbt = _report("GradientBoosting tendencia (TEST)", y[te], p_te_gbt, thr_gbt)
@@ -260,8 +275,10 @@ def main():
     joblib.dump(scaler, ARTIFACTS / f"scaler_sup{sfx}.joblib")
     joblib.dump({"thr_lstm": thr, "thr_lstm_alta": thr_alta,
                  "thr_gbt": thr_gbt, "thr_gbt_alta": thr_gbt_alta,
+                 "iso_lstm": iso_lstm, "iso_gbt": iso_gbt,
                  "input_dim": X.shape[2], "feat_cols": feat_cols, "mejor": mejor,
                  "ap_lstm": ap_lstm, "ap_gbt": ap_gbt,
+                 "component": cfg.get("_component", "engine"),
                  "adverse_min": int(cfg["target"]["adverse_min_severity"])},
                 ARTIFACTS / f"meta_sup{sfx}.joblib")
     print(f"Artefactos guardados en {ARTIFACTS}/  (clf_lstm{sfx}.pt, clf_gbt{sfx}.joblib, ...)")
